@@ -124,6 +124,63 @@ final class DesktopCoverageTests: XCTestCase {
         XCTAssertTrue(DesktopCoverage.counts(appWindow(700, 300, 230, 400)))
     }
 
+    // MARK: Whether anything of the desktop is left showing
+
+    var builtInVisible: CGRect { CGRect(x: 0, y: 37, width: 1470, height: 849) }
+
+    func testAMaximisedWindowHidesTheDesktop() {
+        let maximised = appWindow(0, 37, 1470, 849)
+        XCTAssertTrue(DesktopCoverage.hidesDesktop(windows: [maximised], visible: builtInVisible))
+    }
+
+    func testAFullScreenWindowHidesTheDesktop() {
+        let fullScreen = appWindow(0, 0, 1470, 956)
+        XCTAssertTrue(DesktopCoverage.hidesDesktop(windows: [fullScreen], visible: builtInVisible))
+    }
+
+    func testTwoTiledWindowsHideItBetweenThem() {
+        let left = appWindow(0, 37, 735, 849)
+        let right = appWindow(735, 37, 735, 849)
+        XCTAssertTrue(DesktopCoverage.hidesDesktop(windows: [left, right], visible: builtInVisible))
+    }
+
+    func testAnOrdinaryWindowLeavesTheDesktopShowing() {
+        let safari = appWindow(93, 167, 1272, 794)
+        XCTAssertFalse(DesktopCoverage.hidesDesktop(windows: [safari], visible: builtInVisible))
+    }
+
+    func testAWindowAFewPointsShortOfTheEdgeStillHidesIt() {
+        let almost = appWindow(2, 39, 1466, 845)
+        XCTAssertTrue(DesktopCoverage.hidesDesktop(windows: [almost], visible: builtInVisible))
+    }
+
+    func testAWindowWellShortOfTheEdgeDoesNot() {
+        let short = appWindow(40, 37, 1390, 849)
+        XCTAssertFalse(DesktopCoverage.hidesDesktop(windows: [short], visible: builtInVisible))
+    }
+
+    func testTheWallpaperAndTheDockDoNotHideTheDesktop() {
+        let notAppWindows = [
+            Window(layer: -2147483604, bounds: builtIn, alpha: 1),
+            Window(layer: 20, bounds: builtIn, alpha: 1),
+        ]
+        XCTAssertFalse(DesktopCoverage.hidesDesktop(windows: notAppWindows, visible: builtInVisible))
+    }
+
+    func testNoWindowsLeavesTheDesktopShowing() {
+        XCTAssertFalse(DesktopCoverage.hidesDesktop(windows: [], visible: builtInVisible))
+    }
+
+    func testEachScreenIsAnsweredOnItsOwn() {
+        let maximisedOnBuiltIn = appWindow(0, 37, 1470, 849)
+        let externalVisible = CGRect(x: 1470, y: 37, width: 1920, height: 1043)
+        let hidden = DesktopCoverage.hiddenScreens(
+            windows: [maximisedOnBuiltIn],
+            visible: ["built-in": builtInVisible, "external": externalVisible]
+        )
+        XCTAssertEqual(hidden, ["built-in"])
+    }
+
     // MARK: Settling one look into what is reported
 
     func testTheFirstLookIsReportedAsItIs() {

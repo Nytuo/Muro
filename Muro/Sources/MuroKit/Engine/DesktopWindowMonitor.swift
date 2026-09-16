@@ -10,9 +10,12 @@ import AppKit
 /// of looks timed to catch windows as they finish opening, closing or sliding
 /// away, so the common cases answer in a few tenths of a second.
 public final class DesktopWindowMonitor {
-    /// Fired on the main queue after every look, with every screen that has an
-    /// app window on it. A display missing from the set has a clear desktop.
-    public var onUpdate: ((Set<String>) -> Void)?
+    /// Fired on the main queue after every look, by display UUID.
+    ///
+    /// `covered` holds every screen with an app window on it.
+    /// `hidden` holds the screens where no part of the desktop
+    ///  is showing at all
+    public var onUpdate: ((_ covered: Set<String>, _ hidden: Set<String>) -> Void)?
 
     /// Between events. Short enough that a window closed or minimised from
     /// the keyboard, which nothing announces, is noticed within half a second.
@@ -30,6 +33,7 @@ public final class DesktopWindowMonitor {
     private var followUpLooks: [DispatchWorkItem] = []
     private var confirmation: DispatchWorkItem?
     private var reported: Set<String>?
+    private var reportedHidden: Set<String>?
 
     public init() {}
 
@@ -96,6 +100,7 @@ public final class DesktopWindowMonitor {
         confirmation?.cancel()
         confirmation = nil
         reported = nil
+        reportedHidden = nil
     }
 
     /// Looks now, and again as the windows involved finish moving. A new event
@@ -113,19 +118,34 @@ public final class DesktopWindowMonitor {
 
     private func look(confirming: Bool = false) {
         var screens: [String: CGRect] = [:]
+        var visible: [String: CGRect] = [:]
         for screen in NSScreen.screens {
             guard let uuid = displayUUID(for: screen),
                   let id = directDisplayID(for: screen)
             else { continue }
             screens[uuid] = CGDisplayBounds(id)
+            visible[uuid] = Self.windowCoordinates(of: screen.visibleFrame)
         }
-        let covered = DesktopCoverage.coveredScreens(
-            windows: DesktopCoverage.onScreenWindows(), screens: screens
+        let windows = DesktopCoverage.onScreenWindows()
+        let covered = DesktopCoverage.coveredScreens(windows: windows, screens: screens)
+        let hidden = DesktopCoverage.hiddenScreens(windows: windows, visible: visible)
+
+        let nextCovered = DesktopCoverage.settle(previous: reported, current: covered, confirming: confirming)
+        let nextHidden = DesktopCoverage.settle(previous: reportedHidden, current: hidden, confirming: confirming)
+        reported = nextCovered.report
+        reportedHidden = nextHidden.report
+        onUpdate?(nextCovered.report, nextHidden.report)
+        if nextCovered.needsConfirmation || nextHidden.needsConfirmation { confirmSoon() }
+    }
+
+    private static func windowCoordinates(of frame: CGRect) -> CGRect {
+        guard let main = NSScreen.screens.first else { return frame }
+        return CGRect(
+            x: frame.minX,
+            y: main.frame.maxY - frame.maxY,
+            width: frame.width,
+            height: frame.height
         )
-        let next = DesktopCoverage.settle(previous: reported, current: covered, confirming: confirming)
-        reported = next.report
-        onUpdate?(next.report)
-        if next.needsConfirmation { confirmSoon() }
     }
 
     private func confirmSoon() {

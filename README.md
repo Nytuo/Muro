@@ -48,6 +48,8 @@ wallpaper and every feature is unlocked.
 - 🖱️ **Play only on desktop.** Hold the wallpaper still while you work and let it play when the desktop is clear, one screen at a time.
 - ⚡ **Smooth or Efficient.** Keep a wallpaper's original frame rate, or drop it to 30 fps to halve the power draw. Your choice, per wallpaper.
 - 🖼️ **Explore gallery.** Browse the catalog, preview full screen, download only what you want.
+- 🧊 **Wallpaper Engine scenes.** Download Scene and Video wallpapers from the Steam Workshop and play them on your Mac: layers, effects, particles and parallax, rendered live on Metal. Needs a Steam account that owns Wallpaper Engine.
+- 🌐 **More sources.** Browse and download from the Steam Workshop, MotionBGs and Wallper right inside Explore.
 - 🔄 **New wallpapers arrive on their own.** The library updates without updating the app. More on that below.
 - 📃 **Playlists.** Rotate through a set on a timer, shuffled or in order.
 - ⏱️ **Automations.** Give every wallpaper its own time. Ten seconds each, or a full day schedule where each wallpaper has its own hours.
@@ -208,15 +210,73 @@ Library tab whenever you want the space back.
 
 ---
 
+## Wallpaper Engine, MotionBGs and Wallper
+
+Explore has a source switcher at the top. **Muro** is the catalog above. The
+other three are outside sources, and whatever you download from them becomes an
+ordinary wallpaper in your Library: playlists, automations, Pause After and
+deleting all work the same.
+
+**Steam Workshop.** Search Wallpaper Engine's Workshop, filter to Scene or
+Video wallpapers, or paste a Workshop link. Downloads go through DepotDownloader,
+an open source Steam client Muro fetches once when you press **Set Up**, and
+they need a Steam account that owns Wallpaper Engine. Sign in with your account
+name, and type the password when Steam asks, or scan a QR code with the Steam
+app. Muro never stores the password.
+
+Video items play like any other video. Scene items are rendered live by Muro's
+scene engine, on the desktop and in the full screen preview: image layers, the
+effect chain, particles and mouse parallax. Text and web objects, and a few
+particle behaviours, are not drawn yet. Some scenes use Wallpaper Engine's own
+stock textures, which Muro does not ship; Settings, **Wallpaper Engine**, **Show
+Folder** is where to copy them from your own install.
+
+**Scenes are early days.** Wallpaper Engine's scene format is not documented
+and this support was reverse engineered, so treat it as a beta. A scene may
+look wrong, may be missing an effect, or may not render at all. Some scenes
+also need Wallpaper Engine's own built-in textures, which Muro does not ship:
+if one looks incomplete, copy those from your own install into Settings →
+Wallpaper Engine → Show Folder. Text, clock and web objects, some particle
+behaviours and sprite trails are not drawn yet. Plain video wallpapers, from
+the Workshop or anywhere else, are not affected by any of this.
+
+A scene plays on the desktop only. The lock screen and the screen saver are
+drawn by macOS from a video.
+
+Some wallpapers carry their own sound: a scene's audio layer, or a video with
+an audio track. Muro keeps that audio and stays silent anyway, until you turn
+**Wallpaper Sound** on in Settings. It follows the picture, so a wallpaper that
+is paused, covered or locked away makes no noise.
+
+You can also drop a Wallpaper Engine item folder, one with a `project.json`,
+onto the Library.
+
+**MotionBGs** and **Wallper.** Free looping wallpapers, downloaded as video,
+MotionBGs in HD or 4K and searchable, Wallper by category.
+
+---
+
 ## Build from source
 
 ```bash
-git clone https://github.com/MrRockySL/Muro.git
+git clone --recurse-submodules https://github.com/MrRockySL/Muro.git
 cd Muro/Muro
 ./build-app.sh --install     # builds, bundles, signs, installs to /Applications
 ```
 
+Forgot `--recurse-submodules`? `./build-app.sh` and `scripts/build-scene-engine.sh`
+both notice `Muro/SceneEngine` is empty and run `git submodule update --init`
+for you — but its own repository is currently private, so that step needs
+access to it.
+
 `./build-app.sh --dmg` also produces `dist/Muro-<version>.dmg`.
+
+The Wallpaper Engine scene engine is Rust, so building needs
+[rustup](https://rustup.rs) with both Mac targets
+(`rustup target add aarch64-apple-darwin x86_64-apple-darwin`). `build-app.sh`
+builds it for you. For `swift build` or `swift test` on their own, build it
+first with `scripts/build-scene-engine.sh`. See
+[`Muro/SceneEngine/README.md`](Muro/SceneEngine/README.md).
 
 The package builds MuroKit, which holds the shared engine and library code, the
 app itself, and a handful of command line tools (`muro-engine`, `muro-import`,
@@ -234,6 +294,11 @@ The wallpaper is a video playing in a window that sits just below your desktop
 icons, decoded in hardware by your Mac's video engine, so the CPU barely
 participates. The moment the wallpaper can't be seen, Muro pauses it, and a
 paused wallpaper costs nothing.
+
+A Wallpaper Engine scene is drawn in the same window by the scene engine, in
+Rust on wgpu and Metal. A scene with nothing moving is drawn once; one with
+animated effects or particles runs at 30 fps, and it stops under exactly the
+same conditions a video pauses.
 
 ---
 

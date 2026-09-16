@@ -4,6 +4,7 @@ import MuroKit
 
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
+    @ObservedObject private var sources = SourceStore.shared
 
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon = true
     @AppStorage("showDockIcon") private var showDockIcon = true
@@ -97,6 +98,42 @@ struct SettingsView: View {
                             .padding(.vertical, 5.5)
                             .glassCapsule(fill: 0.09, stroke: 0.15)
                         }
+                    }
+                    divider
+                    row(icon: store.wallpaperVolume > 0 ? "speaker.wave.2" : "speaker.slash",
+                        tint: .cyan, title: "Wallpaper Sound",
+                        subtitle: wallpaperSoundSubtitle) {
+                        GlassDropdown(width: 120, align: .trailing, options: {
+                            [0, 0.25, 0.5, 0.75, 1.0].map { level in
+                                MenuOption(
+                                    title: level == 0 ? "Off" : "\(Int(level * 100))%",
+                                    checked: abs(store.wallpaperVolume - level) < 0.01
+                                ) { store.setWallpaperVolume(level) }
+                            }
+                        }) {
+                            HStack(spacing: 6) {
+                                Text(store.wallpaperVolume == 0 ? "Off" : "\(Int(store.wallpaperVolume * 100))%")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.6))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5.5)
+                            .glassCapsule(fill: 0.09, stroke: 0.15)
+                        }
+                    }
+                    subRow(title: "Quieten for other audio", subtitle: autoMuteSubtitle) {
+                        Toggle("", isOn: Binding(
+                            get: { store.autoMuteWithOtherAudio },
+                            set: { store.setAutoMuteWithOtherAudio($0) }
+                        ))
+                        .toggleStyle(.switch)
+                        .tint(Color.muroAccent)
+                        .labelsHidden()
+                        .disabled(store.wallpaperVolume == 0)
+                        .opacity(store.wallpaperVolume == 0 ? 0.4 : 1)
                     }
                     divider
                     row(icon: "gauge.with.dots.needle.33percent", tint: .mint, title: "Default Quality",
@@ -236,6 +273,65 @@ struct SettingsView: View {
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(Color.muroSecondary)
                         }
+                    }
+                }
+
+                section("WALLPAPER ENGINE") {
+                    row(icon: "cube.transparent", tint: .blue, title: "Workshop Downloads",
+                        subtitle: sources.depotInstalled
+                            ? "DepotDownloader is installed"
+                            : "Fetches DepotDownloader from GitHub, once") {
+                        if sources.depotInstalled {
+                            Text("Ready")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.muroGreen)
+                        } else if sources.installingDepot {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Button("Set Up") { sources.installDepot() }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 5.5)
+                                .glassCapsule(fill: 0.09, stroke: 0.15)
+                        }
+                    }
+                    divider
+                    row(icon: "person.crop.circle", tint: .indigo, title: "Steam Account",
+                        subtitle: workshopAccountSubtitle) {
+                        CapsuleSegments(
+                            options: [("Login", "login"), ("QR Code", "qr")],
+                            selection: Binding(
+                                get: { sources.workshopUsesQR ? "qr" : "login" },
+                                set: { sources.workshopUsesQR = $0 == "qr" }
+                            )
+                        )
+                    }
+                    if !sources.workshopUsesQR {
+                        divider
+                        row(icon: "at", tint: .purple, title: "Username",
+                            subtitle: "Must own Wallpaper Engine") {
+                            TextField("Steam account", text: $sources.workshopUsername)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.white)
+                                .frame(width: 150)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5.5)
+                                .glassCapsule(fill: 0.09, stroke: 0.15)
+                        }
+                    }
+                    divider
+                    row(icon: "photo.stack", tint: .orange, title: "Stock Textures",
+                        subtitle: "Some scenes use Wallpaper Engine's own textures. Copy them from your install") {
+                        Button("Show Folder") { sources.revealStockAssets() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 5.5)
+                            .glassCapsule(fill: 0.09, stroke: 0.15)
                     }
                 }
 
@@ -546,6 +642,24 @@ struct SettingsView: View {
     ///
     /// So it is gone, and the row says where Muro is instead, on the one
     /// combination where nothing on screen leads back to it.
+    private var wallpaperSoundSubtitle: String {
+        store.wallpaperVolume == 0
+            ? "Wallpapers that carry their own sound stay silent"
+            : "Plays a wallpaper's own sound, when it has any"
+    }
+
+    private var autoMuteSubtitle: String {
+        store.wallpaperVolume == 0
+            ? "Nothing to quieten while Wallpaper Sound is off"
+            : "Goes silent while anything else plays, and comes back after"
+    }
+
+    private var workshopAccountSubtitle: String {
+        if sources.workshopUsesQR { return "Scan a code with the Steam app when a download starts" }
+        let name = sources.workshopUsername.trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? "Sign in with the account that owns Wallpaper Engine" : "Downloads as \(name)"
+    }
+
     private var menuBarSubtitle: String {
         showMenuBarIcon || showDockIcon
             ? "Quick controls from the menu bar"

@@ -246,10 +246,70 @@ final class LockScreenService {
     // `LockScreenSelections.afterApply` bounds the record at one per connected
     // display plus `all`, so the rows cannot pile up.
 
-    var isAvailable: Bool {
-        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
-            && FileManager.default.fileExists(atPath: extensionBundleURL.path)
+    /// Why the lock screen and the screen saver are, or are not, on offer.
+    enum Availability: Equatable {
+        case available
+        case needsNewerOS
+        case extensionMissing
+        case translocated
+
+        var title: String {
+            switch self {
+            case .available: return ""
+            case .needsNewerOS: return "This needs macOS 26"
+            case .extensionMissing: return "Not in this build of Muro"
+            case .translocated: return "Move Muro first"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .available:
+                return ""
+            case .needsNewerOS:
+                return """
+                The lock screen and the screen saver use a part of macOS that arrived in macOS 26. \
+                This Mac runs \(Availability.osLabel), so Muro can set your desktop but not those.
+                """
+            case .extensionMissing:
+                return """
+                The lock screen and the screen saver are drawn by a wallpaper extension that only a \
+                full build of Muro carries. Build one with build-app.sh, or use the installed Muro, \
+                and they come back. Your desktop works either way.
+                """
+            case .translocated:
+                return """
+                macOS is running Muro from a temporary copy, where its wallpaper extension cannot be \
+                registered. Move Muro to your Applications folder and open it again.
+                """
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .available: return "lock.display"
+            case .needsNewerOS: return "lock.display"
+            case .extensionMissing: return "hammer"
+            case .translocated: return "folder"
+            }
+        }
+
+        static var osLabel: String {
+            let version = ProcessInfo.processInfo.operatingSystemVersion
+            return version.patchVersion > 0
+                ? "macOS \(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+                : "macOS \(version.majorVersion).\(version.minorVersion)"
+        }
     }
+
+    var availability: Availability {
+        guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 else { return .needsNewerOS }
+        if Self.isTranslocated { return .translocated }
+        guard FileManager.default.fileExists(atPath: extensionBundleURL.path) else { return .extensionMissing }
+        return .available
+    }
+
+    var isAvailable: Bool { availability == .available }
 
     /// macOS keeps **one screen saver for the whole Mac**, so a per-display
     /// screen saver does not exist to write.

@@ -43,6 +43,31 @@ public struct CatalogEntry: Codable, Identifiable, Equatable {
         self.preview720 = preview720
         self.publishedAt = publishedAt
     }
+
+    /// Whether an entry is safe to act on.
+    ///
+    /// The catalog is a file fetched from the network, and its fields go
+    /// straight into file names and fetches: the id names `Masters/<id>.mov`
+    /// and the extension's staging folder, and a `file://` video is copied
+    /// rather than downloaded. An id of `../../Library/LaunchAgents/x` or a
+    /// video of `file:///etc/passwd` in a tampered or mistaken catalog would
+    /// otherwise write outside the library or copy a local file into it.
+    public var isSafe: Bool {
+        Self.isSafeID(id)
+            && Self.isWeb(video) && Self.isWeb(thumbnail)
+            && (preview720.map(Self.isWeb) ?? true)
+    }
+
+    public static func isSafeID(_ id: String) -> Bool {
+        guard !id.isEmpty, id.count <= 128, id != ".", id != ".." else { return false }
+        return id.unicodeScalars.allSatisfy { scalar in
+            scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || "-_.".unicodeScalars.contains(scalar))
+        }
+    }
+
+    private static func isWeb(_ url: URL) -> Bool {
+        url.scheme == "https" || url.scheme == "http"
+    }
 }
 
 public struct RemoteCatalog: Codable {
@@ -104,11 +129,16 @@ public struct RemoteCatalog: Codable {
             throw CatalogError.server(status: http.statusCode)
         }
 
+        var catalog: RemoteCatalog
         do {
-            return try makeDecoder().decode(RemoteCatalog.self, from: data)
+            catalog = try makeDecoder().decode(RemoteCatalog.self, from: data)
         } catch {
             throw CatalogError.unreadable
         }
+        // Dropped one by one rather than rejecting the file, so a single bad
+        // row cannot empty Explore for everybody.
+        catalog.wallpapers.removeAll { !$0.isSafe }
+        return catalog
     }
 }
 

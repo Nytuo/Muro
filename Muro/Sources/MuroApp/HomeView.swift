@@ -124,6 +124,8 @@ struct HomeView: View {
                 // otherwise run at once.
                 if let url = store.heroVideoURL(for: item) {
                     LoopingPlayerView(url: url, isActive: store.previewItem == nil)
+                } else if let scene = store.sceneDirectory(for: item) {
+                    SceneView(directory: scene, isActive: store.previewItem == nil)
                 } else {
                     // Hero-sized, so it gets the full decode.
                     ThumbImage(item: item, maxPixels: ImageCache.fullPixels)

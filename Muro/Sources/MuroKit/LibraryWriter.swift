@@ -130,7 +130,7 @@ public enum LibraryWriter {
         _ = try update(root: root) { manifest in
             let referenced = Set(manifest.wallpapers.flatMap(\.relativeFiles))
             let cutoff = Date().addingTimeInterval(-grace)
-            for folder in ["Masters", "Thumbnails", "Previews"] {
+            for folder in ["Masters", "Thumbnails", "Previews", "Scenes"] {
                 let directory = root.appendingPathComponent(folder, isDirectory: true)
                 guard let names = try? manager.contentsOfDirectory(atPath: directory.path)
                 else { continue }
@@ -158,8 +158,11 @@ public enum LibraryWriter {
                 .flatMap(\.relativeFiles)
             manifest.wallpapers.removeAll { ids.contains($0.id) }
         }
+        let base = root.standardizedFileURL.path + "/"
         for relative in doomed {
-            try? FileManager.default.removeItem(at: root.appendingPathComponent(relative))
+            let url = root.appendingPathComponent(relative).standardizedFileURL
+            guard url.path.hasPrefix(base) else { continue }
+            try? FileManager.default.removeItem(at: url)
         }
         return manifest
     }

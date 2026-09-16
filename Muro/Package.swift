@@ -1,13 +1,30 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
+let sceneEngineLibrary = Context.packageDirectory + "/.build/scene-engine"
+
 let package = Package(
     name: "Muro",
     platforms: [.macOS(.v14)],
     targets: [
+        .systemLibrary(
+            name: "CSceneEngine",
+            path: "Sources/CSceneEngine"
+        ),
         .target(
             name: "MuroKit",
-            path: "Sources/MuroKit"
+            dependencies: ["CSceneEngine"],
+            path: "Sources/MuroKit",
+            linkerSettings: [
+                .unsafeFlags(["-L", sceneEngineLibrary]),
+                .linkedLibrary("wer_ffi"),
+                .linkedFramework("Metal"),
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("CoreFoundation"),
+                .linkedLibrary("objc"),
+                .linkedLibrary("iconv"),
+            ]
         ),
         .executableTarget(
             name: "muro-app",

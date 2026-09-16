@@ -19,6 +19,14 @@ APP="$DIR/dist/Muro.app"
 # which is why nothing else in the project has to know about Intel: every
 # later change reaches both without a second thought. The wallpaper
 # extension carries the same two architectures, set in its Xcode project.
+# SceneEngine/ is a git submodule
+if [[ ! -f "$DIR/SceneEngine/Cargo.toml" ]]; then
+    echo "==> SceneEngine/ is empty — initializing the submodule"
+    git -C "$DIR" submodule update --init SceneEngine
+fi
+
+"$DIR/scripts/build-scene-engine.sh" --universal
+
 echo "==> swift build -c release (universal: arm64 + x86_64)"
 SWIFT_BUILD_FLAGS=(-c release --package-path "$DIR" --arch arm64 --arch x86_64)
 swift build "${SWIFT_BUILD_FLAGS[@]}"

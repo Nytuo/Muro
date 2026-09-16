@@ -7,6 +7,7 @@ public struct TranscodeResult {
     public let height: Int
     public let fps: Double
     public let duration: Double
+    public var hasAudio: Bool = false
 }
 
 public enum TranscodeError: Error, CustomStringConvertible {
@@ -23,11 +24,15 @@ public enum TranscodeError: Error, CustomStringConvertible {
     }
 }
 
-/// Re-encodes a video to HEVC (.mov), video track only (audio is dropped).
-/// Frame rate is preserved unless `halveFrameRate` is set, which drops every
-/// second frame — the cheap, exact way to turn 60 fps into 30 fps for the
-/// "Efficient" playback mode. Decoding and encoding are both hardware
-/// (Media Engine) on Apple Silicon.
+/// Re-encodes a video to HEVC (.mov). Frame rate is preserved unless
+/// `halveFrameRate` is set, which drops every second frame — the cheap, exact
+/// way to turn 60 fps into 30 fps for the "Efficient" playback mode. Decoding
+/// and encoding are both hardware (Media Engine) on Apple Silicon.
+///
+/// An audio track is carried across untouched, as compressed samples, rather
+/// than re-encoded: nothing here would improve it, and passthrough cannot
+/// degrade it. A track the `.mov` container will not take is dropped rather
+/// than failing the import.
 public func transcodeToHEVC(
     source: URL,
     destination: URL,
@@ -48,6 +53,8 @@ public func transcodeToHEVC(
     if let error = loadError { throw TranscodeError.readerFailed("\(error)") }
     guard let track = loadedTrack else { throw TranscodeError.noVideoTrack }
 
+    let audioTrack = firstAudioTrack(of: asset)
+
     let transformedSize = track.naturalSize.applying(track.preferredTransform)
     let width = Int(abs(transformedSize.width).rounded())
     let height = Int(abs(transformedSize.height).rounded())
@@ -65,6 +72,18 @@ public func transcodeToHEVC(
     )
     readerOutput.alwaysCopiesSampleData = false
     reader.add(readerOutput)
+
+    // `nil` output settings on both sides means the compressed samples are
+    // handed over as they are, with no decode and no encode.
+    var audioOutput: AVAssetReaderTrackOutput?
+    if let audioTrack {
+        let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
+        output.alwaysCopiesSampleData = false
+        if reader.canAdd(output) {
+            reader.add(output)
+            audioOutput = output
+        }
+    }
 
     try? FileManager.default.removeItem(at: destination)
     let writer = try AVAssetWriter(outputURL: destination, fileType: .mov)
@@ -91,6 +110,18 @@ public func transcodeToHEVC(
     writerInput.transform = track.preferredTransform
     writer.add(writerInput)
 
+    var audioInput: AVAssetWriterInput?
+    if audioOutput != nil {
+        let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
+        input.expectsMediaDataInRealTime = false
+        if writer.canAdd(input) {
+            writer.add(input)
+            audioInput = input
+        } else {
+            audioOutput = nil
+        }
+    }
+
     guard reader.startReading() else {
         throw TranscodeError.readerFailed(reader.error.map { "\($0)" } ?? "unknown")
     }
@@ -101,7 +132,10 @@ public func transcodeToHEVC(
     let queue = DispatchQueue(label: "muro.transcode")
     let copyDone = DispatchSemaphore(value: 0)
     var frameIndex = 0
-    var sessionStarted = false
+    // The video pump decides when the session starts, and the audio pump has
+    // to wait for it: a sample appended before the session, or earlier than
+    // its start time, is rejected. Two queues, so one lock rather than none.
+    let session = SessionStart()
 
     writerInput.requestMediaDataWhenReady(on: queue) {
         while writerInput.isReadyForMoreMediaData {
@@ -115,9 +149,9 @@ public func transcodeToHEVC(
                 frameIndex += 1
                 if !keep { continue }
             }
-            if !sessionStarted {
-                writer.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sample))
-                sessionStarted = true
+            let presentation = CMSampleBufferGetPresentationTimeStamp(sample)
+            if session.start(at: presentation, on: writer) {
+                // Started by this very sample.
             }
             if !writerInput.append(sample) {
                 reader.cancelReading()
@@ -127,7 +161,38 @@ public func transcodeToHEVC(
             }
         }
     }
+
+    let audioDone = DispatchSemaphore(value: 0)
+    if let audioInput, let audioOutput {
+        let audioQueue = DispatchQueue(label: "muro.transcode.audio")
+        audioInput.requestMediaDataWhenReady(on: audioQueue) {
+            while audioInput.isReadyForMoreMediaData {
+                guard let began = session.waitForStart(while: reader) else {
+                    audioInput.markAsFinished()
+                    audioDone.signal()
+                    return
+                }
+                guard let sample = audioOutput.copyNextSampleBuffer() else {
+                    audioInput.markAsFinished()
+                    audioDone.signal()
+                    return
+                }
+                if CMSampleBufferGetPresentationTimeStamp(sample) < began { continue }
+                if !audioInput.append(sample) {
+                    // The container refused the track. The picture is what
+                    // matters, so finish without it rather than fail.
+                    audioInput.markAsFinished()
+                    audioDone.signal()
+                    return
+                }
+            }
+        }
+    } else {
+        audioDone.signal()
+    }
+
     copyDone.wait()
+    audioDone.wait()
 
     if reader.status == .failed {
         throw TranscodeError.readerFailed(reader.error.map { "\($0)" } ?? "unknown")
@@ -141,7 +206,65 @@ public func transcodeToHEVC(
     }
     removeSafeSaveLeftovers(for: destination)
 
-    return TranscodeResult(width: width, height: height, fps: outputFPS, duration: duration)
+    return TranscodeResult(
+        width: width, height: height, fps: outputFPS, duration: duration,
+        hasAudio: audioInput != nil && hasAudioTrack(at: destination)
+    )
+}
+
+/// When the writer's session began, shared by the video and audio pumps.
+private final class SessionStart {
+    private let lock = NSLock()
+    private var time: CMTime?
+
+    /// Starts the session at `time` if it has not started. True when this call
+    /// is what started it.
+    @discardableResult
+    func start(at time: CMTime, on writer: AVAssetWriter) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard self.time == nil else { return false }
+        writer.startSession(atSourceTime: time)
+        self.time = time
+        return true
+    }
+
+    private var started: CMTime? {
+        lock.lock()
+        defer { lock.unlock() }
+        return time
+    }
+
+    /// Blocks until the video pump has started the session, or until the read
+    /// has clearly stopped, in which case there is nothing to wait for and
+    /// this returns nil.
+    func waitForStart(while reader: AVAssetReader) -> CMTime? {
+        while true {
+            if let started { return started }
+            if reader.status == .failed || reader.status == .cancelled || reader.status == .completed {
+                return started
+            }
+            Thread.sleep(forTimeInterval: 0.002)
+        }
+    }
+}
+
+/// Whether a finished file really ended up with audio, rather than whether one
+/// was attempted. The difference is a track the container quietly refused.
+private func hasAudioTrack(at url: URL) -> Bool {
+    firstAudioTrack(of: AVURLAsset(url: url)) != nil
+}
+
+/// The asset's first audio track, loaded synchronously.
+private func firstAudioTrack(of asset: AVURLAsset) -> AVAssetTrack? {
+    var track: AVAssetTrack?
+    let done = DispatchSemaphore(value: 0)
+    asset.loadTracks(withMediaType: .audio) { tracks, _ in
+        track = tracks?.first
+        done.signal()
+    }
+    done.wait()
+    return track
 }
 
 /// With `shouldOptimizeForNetworkUse`, AVAssetWriter produces the faststart
@@ -175,9 +298,10 @@ func recommendedBitrate(width: Int, height: Int, fps: Double) -> Int {
 ///
 /// This copies the compressed samples across instead, so the picture that
 /// lands in the library is the picture that was handed in, to the bit. What
-/// still happens is everything around the video: the audio is dropped (a
-/// wallpaper is silent), the container becomes `.mov` like every other master,
-/// and `moov` goes to the front so the file streams.
+/// still happens is everything around the video: the container becomes `.mov`
+/// like every other master, and `moov` goes to the front so the file streams.
+/// An audio track comes across untouched as well, and is dropped only if the
+/// export refuses it, in which case the video alone is exported again.
 ///
 /// It goes through a composition holding only the video track, exported with
 /// the passthrough preset. Copying the samples by hand with a reader and a
@@ -213,8 +337,6 @@ public func copyVideoStream(source: URL, destination: URL) throws -> TranscodeRe
     let fps = Double(track.nominalFrameRate)
     let duration = CMTimeGetSeconds(track.timeRange.duration)
 
-    // Video only. This is also how the audio is stripped: the audio track is
-    // simply never inserted, so nothing has to be filtered out later.
     let composition = AVMutableComposition()
     guard let videoTrack = composition.addMutableTrack(
         withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
@@ -228,8 +350,43 @@ public func copyVideoStream(source: URL, destination: URL) throws -> TranscodeRe
     }
     videoTrack.preferredTransform = track.preferredTransform
 
+    // The source's own sound, when it has any. Inserted best effort: a track
+    // that will not insert is one the export would not have taken either.
+    var audioComposed: AVMutableCompositionTrack?
+    if let sourceAudio = firstAudioTrack(of: asset),
+       let compositionAudio = composition.addMutableTrack(
+           withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
+       ) {
+        if (try? compositionAudio.insertTimeRange(sourceAudio.timeRange, of: sourceAudio, at: .zero)) != nil {
+            audioComposed = compositionAudio
+        } else {
+            composition.removeTrack(compositionAudio)
+        }
+    }
+
+    do {
+        try passthroughExport(composition, to: destination)
+    } catch {
+        // Passthrough cannot re-encode, so a codec the `.mov` container will
+        // not carry fails the whole export. The picture is what a wallpaper
+        // is; going again without the sound beats refusing the import.
+        guard let audioComposed else { throw error }
+        composition.removeTrack(audioComposed)
+        try passthroughExport(composition, to: destination)
+        removeSafeSaveLeftovers(for: destination)
+        return TranscodeResult(width: width, height: height, fps: fps, duration: duration, hasAudio: false)
+    }
+    removeSafeSaveLeftovers(for: destination)
+
+    return TranscodeResult(
+        width: width, height: height, fps: fps, duration: duration,
+        hasAudio: audioComposed != nil && hasAudioTrack(at: destination)
+    )
+}
+
+private func passthroughExport(_ asset: AVAsset, to destination: URL) throws {
     guard let export = AVAssetExportSession(
-        asset: composition, presetName: AVAssetExportPresetPassthrough
+        asset: asset, presetName: AVAssetExportPresetPassthrough
     ) else {
         throw TranscodeError.writerFailed("no passthrough export session")
     }
@@ -249,7 +406,4 @@ public func copyVideoStream(source: URL, destination: URL) throws -> TranscodeRe
             export.error.map { "\($0)" } ?? "status \(export.status.rawValue)"
         )
     }
-    removeSafeSaveLeftovers(for: destination)
-
-    return TranscodeResult(width: width, height: height, fps: fps, duration: duration)
 }

@@ -759,6 +759,35 @@ struct FPSChip: View {
     }
 }
 
+/// The small badges along the bottom of a card: SCENE, where it was
+/// downloaded from, its size, and a speaker when it has sound of its own.
+struct MiniBadge: View {
+    let badge: WallpaperItem.Badge
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let symbol = badge.systemImage {
+                Image(systemName: symbol)
+                    .font(.system(size: 8, weight: .semibold))
+            }
+            if let text = badge.text {
+                Text(text)
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .tracking(0.7)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .foregroundStyle(badge.accent ? Color.black : .white.opacity(0.92))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(badge.accent ? Color.muroAccent : Color.black.opacity(0.45)))
+        .overlay(
+            Capsule().strokeBorder(Color.white.opacity(badge.accent ? 0 : 0.16), lineWidth: 1)
+        )
+    }
+}
+
 struct NewBadge: View {
     var body: some View {
         Text("NEW")
@@ -965,6 +994,13 @@ struct WallpaperCard: View {
                 Text(item.title)
                     .font(.system(size: 14.5, weight: .semibold))
                     .foregroundStyle(.white)
+                    .lineLimit(1)
+                if !item.badges.isEmpty {
+                    HStack(spacing: 5) {
+                        ForEach(item.badges) { badge in MiniBadge(badge: badge) }
+                    }
+                    .padding(.top, 3)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 18)

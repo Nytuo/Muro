@@ -70,6 +70,57 @@ public enum DesktopCoverage {
         return covered
     }
 
+    // MARK: - Is the desktop hidden
+
+    /// Points sampled across a screen's visible area to decide whether any of
+    /// the desktop is still showing. A few hundred point-in-rectangle tests
+    /// per screen, which is nothing next to the window-list query that
+    /// precedes them.
+    public static let fillColumns = 24
+    public static let fillRows = 16
+
+    /// A window that stops a point or two short of an edge has still covered
+    /// it, and display and window coordinates do not always round the same
+    /// way.
+    public static let fillSlack: CGFloat = 3
+
+    /// Whether app windows hide the whole desktop on one screen.
+    ///
+    /// `frame` is the screen's **visible** area, which is what is left once
+    /// the menu bar and the Dock have taken their strips: a window maximised
+    /// with the green button fills exactly that, and nothing of the desktop
+    /// shows behind it.
+    public static func hidesDesktop(windows: [Window], visible frame: CGRect) -> Bool {
+        guard frame.width > 0, frame.height > 0 else { return false }
+        let counting = windows.filter(counts).map { $0.bounds.insetBy(dx: -fillSlack, dy: -fillSlack) }
+        guard !counting.isEmpty else { return false }
+        let sampled = frame.insetBy(dx: fillSlack, dy: fillSlack)
+        guard sampled.width > 0, sampled.height > 0 else { return true }
+        for column in 0..<fillColumns {
+            for row in 0..<fillRows {
+                let point = CGPoint(
+                    x: sampled.minX + sampled.width * CGFloat(column) / CGFloat(fillColumns - 1),
+                    y: sampled.minY + sampled.height * CGFloat(row) / CGFloat(fillRows - 1)
+                )
+                if !counting.contains(where: { $0.contains(point) }) { return false }
+            }
+        }
+        return true
+    }
+
+    /// Every screen whose desktop is completely hidden by app windows, keyed
+    /// the same way as `coveredScreens`. `visible` holds each screen's visible
+    /// area in the window list's own coordinates.
+    public static func hiddenScreens<Key: Hashable>(
+        windows: [Window], visible: [Key: CGRect]
+    ) -> Set<Key> {
+        var hidden = Set<Key>()
+        for (key, frame) in visible where hidesDesktop(windows: windows, visible: frame) {
+            hidden.insert(key)
+        }
+        return hidden
+    }
+
     /// What to hand on after a look, given what was handed on last time.
     ///
     /// A screen that has just gone clear is still reported covered until a

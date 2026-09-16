@@ -1,0 +1,7 @@
+// The Wallpaper Engine scene renderer, written in Rust (SceneEngine/) and
+// linked as a static library built by scripts/build-scene-engine.sh. The
+// header is the one the Rust crate itself ships, so the two cannot drift.
+module CSceneEngine {
+    header "../../SceneEngine/ffi/include/wer_ffi.h"
+    export *
+}

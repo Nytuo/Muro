@@ -17,7 +17,8 @@ public func importVideo(
     title: String? = nil,
     category: String? = nil,
     root: URL = LibraryManifest.defaultRoot(),
-    preserveOriginal: Bool = false
+    preserveOriginal: Bool = false,
+    origin: String? = nil
 ) throws -> WallpaperEntry {
     let mastersDir = root.appendingPathComponent("Masters", isDirectory: true)
     let thumbsDir = root.appendingPathComponent("Thumbnails", isDirectory: true)
@@ -61,7 +62,9 @@ public func importVideo(
             height: result.height,
             fps: result.fps,
             duration: result.duration,
-            sizeBytes: sizeBytes ?? 0
+            sizeBytes: sizeBytes ?? 0,
+            origin: origin,
+            hasAudio: result.hasAudio
         )
         try LibraryWriter.update(root: root) { manifest in
             manifest.wallpapers.append(entry)

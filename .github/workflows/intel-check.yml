@@ -27,6 +27,9 @@ jobs:
     runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.SCENE_ENGINE_PAT || secrets.GITHUB_TOKEN }}
 
       - name: What machine is this
         run: |
@@ -34,6 +37,14 @@ jobs:
           echo "cpu:  $(sysctl -n machdep.cpu.brand_string)"
           sw_vers
           test "$(uname -m)" = "x86_64" || { echo "NOT an Intel runner"; exit 1; }
+
+      - name: Rust toolchain for the scene engine
+        run: |
+          command -v rustup >/dev/null || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build the scene engine
+        run: Muro/scripts/build-scene-engine.sh
 
       - name: Build release
         run: swift build -c release --package-path Muro

@@ -16,6 +16,33 @@ final class DesktopPlaybackTests: XCTestCase {
         XCTAssertTrue(DesktopPlayback.needsWindowCheck(playOnlyOnDesktop: false, replayOnClearDesktop: true))
     }
 
+    func testAutoPauseWhenCoveredAlsoNeedsTheWindowList() {
+        XCTAssertTrue(DesktopPlayback.needsWindowCheck(
+            playOnlyOnDesktop: false, replayOnClearDesktop: false, autoPauseWhenCovered: true
+        ))
+        XCTAssertFalse(DesktopPlayback.needsWindowCheck(
+            playOnlyOnDesktop: false, replayOnClearDesktop: false, autoPauseWhenCovered: false
+        ))
+    }
+
+    // MARK: Auto-pause when covered
+
+    func testAHiddenDesktopHoldsItsWallpaper() {
+        XCTAssertTrue(DesktopPlayback.holdsForCover(isHidden: true, autoPauseWhenCovered: true))
+    }
+
+    func testAVisibleDesktopPlays() {
+        XCTAssertFalse(DesktopPlayback.holdsForCover(isHidden: false, autoPauseWhenCovered: true))
+    }
+
+    func testWithAutoPauseOffAHiddenDesktopHoldsNothing() {
+        XCTAssertFalse(DesktopPlayback.holdsForCover(isHidden: true, autoPauseWhenCovered: false))
+    }
+
+    func testAScreenNobodyHasLookedAtIsNotHeldForCover() {
+        XCTAssertFalse(DesktopPlayback.holdsForCover(isHidden: nil, autoPauseWhenCovered: true))
+    }
+
     func testAConfigWrittenBeforeTheSwitchesLeavesBothOff() throws {
         let config = try JSONDecoder().decode(EngineConfig.self, from: Data(#"{"perDisplay":{}}"#.utf8))
         XCTAssertNil(config.playOnlyOnDesktop)

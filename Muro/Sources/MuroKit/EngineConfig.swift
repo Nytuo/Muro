@@ -22,6 +22,20 @@ public struct EngineConfig: Codable {
     public var paused: Bool?
     /// Playback speed 0.5–1.5 (nil = 1.0).
     public var playbackSpeed: Double?
+    /// How loud a wallpaper's own sound plays, 0–1 (nil = silent). Covers both a Wallpaper Engine
+    /// scene's audio layer and a video's own audio track; most wallpapers have
+    /// neither, and those stay silent whatever this says.
+    public var wallpaperVolume: Double?
+    /// What `wallpaperVolume` was called for the one release where it only
+    /// applied to scenes. Read, never written.
+    public var sceneVolume: Double?
+
+    /// Go quiet while anything else on the Mac is playing sound, and come back
+    /// when it stops (nil = true). Only consulted while the wallpaper has a
+    /// volume at all.
+    public var autoMuteWithOtherAudio: Bool?
+
+    public var volume: Double { wallpaperVolume ?? sceneVolume ?? 0 }
     /// Pause while macOS Low Power Mode is on (nil = false).
     public var autoPauseLowPower: Bool?
     /// Pause while discharging below 20% battery (nil = false).

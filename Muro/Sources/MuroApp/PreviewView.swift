@@ -69,6 +69,8 @@ struct PreviewView: View {
                              store.videoURL(for: item, mode: "smooth") {
                     // Downloaded → the real master, full quality.
                     LoopingPlayerView(url: url)
+                } else if let scene = store.sceneDirectory(for: item) {
+                    SceneView(directory: scene)
                 } else if item.id == BundledWallpaper.id,
                           let url = BundledWallpaper.videoURL {
                     // The bundled 4K is already on disk — never show it soft.
@@ -118,7 +120,9 @@ struct PreviewView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                Text("\(item.width)×\(item.height) · \(formatSize(item.sizeBytes)) · \(formatDuration(item.duration))")
+                Text(item.isScene
+                     ? "\(item.width)×\(item.height) · \(formatSize(item.sizeBytes)) · Wallpaper Engine scene"
+                     : "\(item.width)×\(item.height) · \(formatSize(item.sizeBytes)) · \(formatDuration(item.duration))")
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(Color.muroSecondary)
             }
@@ -138,6 +142,10 @@ struct PreviewView: View {
                     barIcon("arrowshape.turn.up.right.fill", opticalYOffset: 0.4)
                 }
                 .buttonStyle(.plain)
+            }
+
+            if item.isScene {
+                SceneWarningButton(item: item)
             }
 
             if item.fps > 40 {
@@ -433,6 +441,8 @@ struct ChooseDisplayPopover: View {
     /// pills used to be simply disabled with a small "26+" badge, which says
     /// there is a rule without ever saying what it is.
     @State private var showLockRequirement = false
+    /// A scene has no video for the lock screen or the screen saver to play.
+    @State private var showSceneRequirement = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -454,14 +464,19 @@ struct ChooseDisplayPopover: View {
             // whole card appears to jump (owner, 2026-07-20).
             ZStack {
                 chooser
-                    .opacity(showLockRequirement ? 0 : 1)
-                    .allowsHitTesting(!showLockRequirement)
+                    .opacity(showLockRequirement || showSceneRequirement ? 0 : 1)
+                    .allowsHitTesting(!showLockRequirement && !showSceneRequirement)
                 if showLockRequirement {
                     lockRequirementCard.transition(.opacity)
+                } else if showSceneRequirement {
+                    sceneRequirementCard.transition(.opacity)
                 }
             }
         }
         .padding(15)
+        .onAppear {
+            if item.isScene, store.applySurface.needsAppleExtension { store.applySurface = .desktop }
+        }
         // No background of its own: `anchoredCard` draws it on the same glass
         // as every dropdown, with the same corner radius.
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -473,17 +488,17 @@ struct ChooseDisplayPopover: View {
         VStack(spacing: 9) {
             ZStack {
                 Circle().fill(Color.muroAccent.opacity(0.14))
-                Image(systemName: "lock.display")
+                Image(systemName: store.lockScreenAvailability.symbolName)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(Color.muroAccent)
             }
             .frame(width: 40, height: 40)
 
-            Text("This needs macOS 26")
+            Text(store.lockScreenAvailability.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
 
-            Text("The lock screen and the screen saver use a part of macOS that arrived in macOS 26. This Mac runs \(Self.osLabel), so Muro can set your desktop but not those.")
+            Text(store.lockScreenAvailability.detail)
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(Color.muroSecondary)
                 .multilineTextAlignment(.center)
@@ -494,6 +509,47 @@ struct ChooseDisplayPopover: View {
                 withAnimation(Self.ease) { showLockRequirement = false }
             } label: {
                 Text("Set my desktop instead")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                    .background(Capsule().fill(Color.white.opacity(0.12)))
+                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.2), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var sceneRequirementCard: some View {
+        VStack(spacing: 9) {
+            ZStack {
+                Circle().fill(Color.muroAccent.opacity(0.14))
+                Image(systemName: "cube.transparent")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(Color.muroAccent)
+            }
+            .frame(width: 40, height: 40)
+
+            Text("Scenes play on the desktop")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+
+            Text("Muro draws a Wallpaper Engine scene live. The lock screen and the screen saver are drawn by macOS from a video, so a scene cannot go there.")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(Color.muroSecondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(1.5)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                withAnimation(Self.ease) {
+                    showSceneRequirement = false
+                    store.applySurface = .desktop
+                }
+            } label: {
+                Text("Set my desktop")
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16)
@@ -680,18 +736,22 @@ struct ChooseDisplayPopover: View {
 
     private func surfacePill(_ surface: ApplySurface) -> some View {
         let selected = store.applySurface == surface
-        let enabled = !surface.needsAppleExtension || store.lockScreenAvailable
+        let blockedForScene = item.isScene && surface.needsAppleExtension
+        let enabled = (!surface.needsAppleExtension || store.lockScreenAvailable) && !blockedForScene
         // Constant font weight: weight changes used to resize the labels and
         // make "Lockscreen" jump sideways when switching Both → Desktop.
         return Button {
             guard enabled else {
                 // Not disabled any more. A dead button tells someone their
                 // click failed; this tells them what the rule is.
-                withAnimation(Self.ease) { showLockRequirement = true }
+                withAnimation(Self.ease) {
+                    if blockedForScene { showSceneRequirement = true } else { showLockRequirement = true }
+                }
                 return
             }
             withAnimation(Self.ease) {
                 showLockRequirement = false
+                showSceneRequirement = false
                 store.applySurface = surface
             }
         } label: {
@@ -709,7 +769,7 @@ struct ChooseDisplayPopover: View {
                     }
                 }
                 .overlay(alignment: .topTrailing) {
-                    if !enabled {
+                    if !enabled, !blockedForScene, store.lockScreenAvailability == .needsNewerOS {
                         Text("26+")
                             .font(.system(size: 6.5, weight: .bold))
                             .tracking(0.6)
@@ -725,7 +785,9 @@ struct ChooseDisplayPopover: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Apply to \(surface.rawValue.lowercased())")
         .accessibilityValue(selected ? "Selected" : "Not selected")
-        .help(enabled ? "" : "The lock screen and screen saver require macOS 26 or later")
+        .help(enabled ? "" : (blockedForScene
+                              ? "Scenes play on the desktop"
+                              : store.lockScreenAvailability.detail))
     }
 
     private var allPill: some View {

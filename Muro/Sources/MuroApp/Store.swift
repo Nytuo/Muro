@@ -24,6 +24,42 @@ struct WallpaperItem: Identifiable, Equatable {
     /// carry the flag. See `AppStore.likedIDs`.
     var liked: Bool = false
     var isDownloaded: Bool { local != nil }
+    /// A Wallpaper Engine scene, rendered live rather than played as a video.
+    var isScene: Bool { local?.isScene ?? false }
+    /// Carries sound of its own: a video's audio track, or a scene's audio
+    /// layer. Muro plays it only if Wallpaper Sound is turned up.
+    var hasAudio: Bool { local?.hasAudio ?? false }
+
+    /// Where a downloaded wallpaper came from, for the badge on its card.
+    var sourceBadge: String? {
+        if let origin = local?.origin {
+            switch origin.split(separator: ":").first.map(String.init) {
+            case WallpaperSource.workshop.rawValue: return "WE WORKSHOP"
+            case WallpaperSource.motionBGs.rawValue: return "MOTIONBGS"
+            case WallpaperSource.wallper.rawValue: return "WALLPER"
+            default: return nil
+            }
+        }
+        if local != nil, remote == nil { return "IMPORTED" }
+        return nil
+    }
+
+    /// What a card says about a wallpaper at a glance
+    struct Badge: Identifiable, Equatable {
+        var id: String
+        var text: String?
+        var systemImage: String?
+        var accent = false
+    }
+
+    var badges: [Badge] {
+        var out: [Badge] = []
+        if isScene { out.append(Badge(id: "kind", text: "SCENE", accent: true)) }
+        if let source = sourceBadge { out.append(Badge(id: "source", text: source)) }
+        if width > 0 { out.append(Badge(id: "quality", text: resolutionLabel)) }
+        if hasAudio { out.append(Badge(id: "audio", systemImage: "speaker.wave.2.fill")) }
+        return out
+    }
     var resolutionLabel: String {
         width >= 3200 ? "4K" : (width >= 2200 ? "1440p" : "1080p")
     }
@@ -276,6 +312,8 @@ final class AppStore: ObservableObject {
     /// Kept separate from `applyError` so each alert can say what actually
     /// went wrong instead of sharing one misleading title.
     @Published var importError: String?
+    /// A catalog download that failed
+    @Published var downloadError: String?
     /// Set when a delete had a consequence the user did not ask for and
     /// cannot see, such as a running playlist losing its last wallpaper.
     @Published var deleteNotice: StopNotice?
@@ -822,8 +860,12 @@ final class AppStore: ObservableObject {
     /// Where the "Support Muro" row in Settings goes.
     static let sponsorURL = URL(string: "https://github.com/sponsors/MrRockySL")!
 
+    /// This build's version, or "dev" when there is no bundle to read one
+    /// from, which prevent the updater to show up during dev
     static let appVersion =
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+
+    static var isDevelopmentBuild: Bool { appVersion == "dev" }
 
     /// What the Settings "Check for Updates" button is showing right now.
     /// The launch check stays silent (`.idle`) so nothing flashes on startup;
@@ -857,6 +899,13 @@ final class AppStore: ObservableObject {
         // surfaces the outcome, because someone who pressed a button deserves
         // an answer rather than a button that does nothing.
         if userInitiated { updateCheck = .checking }
+        guard !AppStore.isDevelopmentBuild else {
+            updateCheck = .idle
+            latestRelease = nil
+            updateAvailable = nil
+            updateCalloutVisible = false
+            return
+        }
         guard let url = URL(string: "https://api.github.com/repos/MrRockySL/Muro/releases/latest"),
               let (data, response) = try? await URLSession.shared.data(from: url),
               (response as? HTTPURLResponse)?.statusCode == 200,
@@ -954,6 +1003,7 @@ final class AppStore: ObservableObject {
 
     /// Lock screens need macOS 26 and the embedded extension.
     var lockScreenAvailable: Bool { lockScreen.isAvailable }
+    var lockScreenAvailability: LockScreenService.Availability { lockScreen.availability }
     var lockScreenWallpaperID: String? { lockScreen.activeWallpaperID }
     var screenSaverWallpaperID: String? { lockScreen.screenSaverWallpaperID }
 
@@ -981,7 +1031,7 @@ final class AppStore: ObservableObject {
         surface explicitSurface: ApplySurface?
     ) async {
         guard var entry = item.local else { return }
-        let surface = explicitSurface ?? .desktop
+        let surface = entry.isScene ? .desktop : (explicitSurface ?? .desktop)
         let resolvedMode = entry.fps > 40 ? mode : "smooth"
 
         if resolvedMode == "efficient", entry.efficientFile == nil {
@@ -1001,7 +1051,7 @@ final class AppStore: ObservableObject {
         let appleSurfaces = surface.appleSurfaces
         if !appleSurfaces.isEmpty {
             guard lockScreenAvailable else {
-                applyError = LockScreenServiceError.requiresTahoe.localizedDescription
+                applyError = lockScreenAvailability.detail
                 return
             }
             let videoURL = resolveVideoURL(entry: entry, mode: resolvedMode, root: root)
@@ -1132,6 +1182,44 @@ final class AppStore: ObservableObject {
     }
 
     var playbackSpeed: Double { config.playbackSpeed ?? 1.0 }
+
+    /// How loud a wallpaper's own sound plays, 0 to 1: a video's audio track,
+    /// or a Wallpaper Engine scene's audio layer.
+    ///
+    /// Off by default.
+    var wallpaperVolume: Double { config.volume }
+
+    var isWallpaperMuted: Bool { wallpaperVolume <= 0 }
+
+    var currentWallpaperHasAudio: Bool {
+        guard let id = currentAppliedID, let item = item(id: id) else { return false }
+        return item.local?.hasAudio == true
+    }
+
+    private static let rememberedVolumeKey = "lastWallpaperVolume"
+
+    func toggleMute() {
+        if wallpaperVolume > 0 {
+            defaults.set(wallpaperVolume, forKey: Self.rememberedVolumeKey)
+            setWallpaperVolume(0)
+        } else {
+            let remembered = defaults.double(forKey: Self.rememberedVolumeKey)
+            setWallpaperVolume(remembered > 0 ? remembered : 0.5)
+        }
+    }
+
+    var autoMuteWithOtherAudio: Bool { config.autoMuteWithOtherAudio ?? true }
+
+    func setAutoMuteWithOtherAudio(_ on: Bool) {
+        config.autoMuteWithOtherAudio = on
+        saveConfig()
+    }
+
+    func setWallpaperVolume(_ volume: Double) {
+        config.wallpaperVolume = volume > 0 ? min(1, volume) : nil
+        config.sceneVolume = nil
+        saveConfig()
+    }
 
     func setPlaybackSpeed(_ speed: Double) {
         config.playbackSpeed = speed
@@ -1438,7 +1526,13 @@ final class AppStore: ObservableObject {
                     AppStore.shared.recomputeSize()
                 }
             } catch {
-                await MainActor.run { AppStore.shared.downloads[id] = nil }
+                let reason = (error as? URLError).map { _ in
+                    "Check that you are online, then try again."
+                } ?? importFailureReason(error)
+                await MainActor.run {
+                    AppStore.shared.downloads[id] = nil
+                    AppStore.shared.downloadError = "\(remote.title) could not be downloaded. \(reason)"
+                }
             }
         }
     }
@@ -1446,6 +1540,12 @@ final class AppStore: ObservableObject {
     // MARK: - Import (user's own videos)
 
     func importFiles(_ urls: [URL]) {
+        let workshopFolders = urls.filter {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("project.json").path)
+        }
+        for folder in workshopFolders { SourceStore.shared.importWorkshopFolder(folder) }
+        let urls = urls.filter { !workshopFolders.contains($0) }
+        guard !urls.isEmpty || workshopFolders.isEmpty else { return }
         let videos = urls.filter { ["mp4", "mov", "m4v"].contains($0.pathExtension.lowercased()) }
         guard !videos.isEmpty else {
             // Dropping a folder, an image or an unsupported video used to do
@@ -1500,7 +1600,7 @@ final class AppStore: ObservableObject {
     // MARK: - Efficient variant
 
     func ensureEfficientVariant(_ entry: WallpaperEntry) async -> Bool {
-        guard entry.fps > 40, entry.efficientFile == nil else { return true }
+        guard !entry.isScene, entry.fps > 40, entry.efficientFile == nil else { return true }
         generating.insert(entry.id)
         defer { generating.remove(entry.id) }
         let root = self.root
@@ -1763,6 +1863,7 @@ final class AppStore: ObservableObject {
             kept: manifest.wallpapers.count - removed.count,
             personal: removed.filter { !remote.contains($0.id) }.count,
             bytes: removed.reduce(0) { $0 + $1.sizeBytes } + PreviewCache.sizeOnDisk()
+                + SourceCache.sizeOnDisk()
         )
     }
 
@@ -1782,8 +1883,9 @@ final class AppStore: ObservableObject {
             }
             // Re-downloadable and never counted in the library size, so it is
             // never mentioned anywhere: 20 MB of streamed previews that only
-            // Clear can reach.
+            // Clear can reach, plus the saved browses of the outside sources.
             PreviewCache.clear()
+            SourceCache.clear()
             if let updated = try? await Task.detached(priority: .utility, operation: {
                 [root] in try LibraryWriter.delete(ids: Set(doomed), root: root)
             }).value {
@@ -1843,9 +1945,15 @@ final class AppStore: ObservableObject {
     // MARK: - Files
 
     func videoURL(for item: WallpaperItem, mode: String) -> URL? {
-        guard let entry = item.local else { return nil }
+        guard let entry = item.local, !entry.isScene else { return nil }
         let url = resolveVideoURL(entry: entry, mode: mode, root: root)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    func sceneDirectory(for item: WallpaperItem) -> URL? {
+        guard let scene = item.local?.scene else { return nil }
+        let url = root.appendingPathComponent(scene, isDirectory: true)
+        return FileManager.default.fileExists(atPath: url.appendingPathComponent("scene.json").path) ? url : nil
     }
 
     func thumbnailPath(for item: WallpaperItem) -> String? {
@@ -2000,8 +2108,9 @@ private final class MasterDownload: NSObject, URLSessionDownloadDelegate, @unche
 }
 
 /// Puts the master at `destination`: a copy for the bundled wallpaper's
-/// `file://` URL, a real download with progress for anything else.
-private func fetchMaster(
+/// `file://` URL, a real download with progress for anything else. Also what
+/// the MotionBGs and Wallper downloads in `SourceStore` go through.
+func fetchMaster(
     from source: URL,
     to destination: URL,
     progress: @escaping (Double) -> Void
@@ -2035,6 +2144,7 @@ func downloadRemoteWallpaper(
     root: URL,
     progress: @escaping (Double) -> Void
 ) async throws {
+    guard CatalogEntry.isSafeID(remote.id) else { throw URLError(.badURL) }
     let masters = root.appendingPathComponent("Masters", isDirectory: true)
     let thumbs = root.appendingPathComponent("Thumbnails", isDirectory: true)
     for dir in [masters, thumbs] {

@@ -136,9 +136,11 @@ final class DesktopStillService {
             anyWallpaper = true
             let still = stillURL(for: entry.id)
             guard FileManager.default.fileExists(atPath: still.path) else {
-                let video = resolveVideoURL(entry: entry, mode: assignment.mode, root: root)
-                if FileManager.default.fileExists(atPath: video.path) {
-                    missing.append((entry.id, video))
+                let source = entry.isScene
+                    ? root.appendingPathComponent(entry.thumbnail)
+                    : resolveVideoURL(entry: entry, mode: assignment.mode, root: root)
+                if FileManager.default.fileExists(atPath: source.path) {
+                    missing.append((entry.id, source))
                 }
                 continue
             }
@@ -240,6 +242,10 @@ final class DesktopStillService {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true
             )
+            if video.pathExtension.lowercased() == "jpg" {
+                try FileManager.default.copyItem(at: video, to: destination)
+                return
+            }
             try generateThumbnail(
                 video: video, destination: destination, at: 1.0, maxDimension: 3840
             )

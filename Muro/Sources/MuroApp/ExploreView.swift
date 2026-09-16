@@ -19,6 +19,13 @@ struct ExploreView: View {
     @State private var categoryShift: CGFloat = 1
     @State private var resolution = "All"
     @State private var fps = "All"
+    @AppStorage("exploreSource") private var sourceRaw = ExploreSource.muro.rawValue
+    @State private var sourceShift: CGFloat = 1
+    @StateObject private var workshopBrowser = SourceBrowserModel(source: .workshop)
+    @StateObject private var motionBGsBrowser = SourceBrowserModel(source: .motionBGs)
+    @StateObject private var wallperBrowser = SourceBrowserModel(source: .wallper)
+
+    private var source: ExploreSource { ExploreSource(rawValue: sourceRaw) ?? .muro }
 
     private let gridColumns = [
         GridItem(.flexible(), spacing: 24),
@@ -69,32 +76,21 @@ struct ExploreView: View {
             MuroPageBackground()
             GlassTray {
                 VStack(alignment: .leading, spacing: 0) {
-                    categoryRow
+                    sourceRow
                         .padding(.horizontal, 40)
-                        .padding(.top, 30)
-                    filterRow
-                        .padding(.horizontal, 40)
-                        .padding(.top, 14)
-                    ScrollView(.vertical, showsIndicators: false) {
-                        Group {
-                            if filtered.isEmpty {
-                                emptyState
-                            } else {
-                                VStack(spacing: 22) {
-                                    catalogNotice
-                                    grid
-                                }
-                            }
+                        .padding(.top, 24)
+                    Group {
+                        switch source {
+                        case .muro: catalogBrowser
+                        case .workshop: SourceBrowserView(model: workshopBrowser)
+                        case .motionBGs: SourceBrowserView(model: motionBGsBrowser)
+                        case .wallper: SourceBrowserView(model: wallperBrowser)
                         }
-                        .padding(.horizontal, 40)
-                        .padding(.top, 22)
-                        .padding(.bottom, 40)
-                        .id(filterKey)
-                        .transition(.muroPage(shift: categoryShift))
                     }
-                    .scrollFade(top: 22, bottom: 46)
-                    .animation(.muroPage, value: filterKey)
+                    .id(source)
+                    .transition(.muroPage(shift: sourceShift))
                 }
+                .animation(.muroPage, value: source)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .padding(.horizontal, 20)
@@ -105,6 +101,75 @@ struct ExploreView: View {
         // to nothing, with no lit segment to say why.
         .onChange(of: store.categories) { _, list in
             if category != "All", !list.contains(category) { category = "All" }
+        }
+    }
+
+    // MARK: - Sources
+
+    /// Muro's catalog first, then the outside sources, in one glass control
+    /// above everything else on the page.
+    private var sourceRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                sourceSegments
+                Spacer(minLength: 0)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                sourceSegments.padding(.horizontal, 2).padding(.vertical, 3)
+            }
+        }
+        .frame(height: 44)
+    }
+
+    private var sourceSegments: some View {
+        PillSegments(
+            options: ExploreSource.allCases.map { PillOption($0.rawValue, $0.label, systemImage: $0.systemImage) },
+            selection: Binding(
+                get: { sourceRaw },
+                set: { new in
+                    guard new != sourceRaw else { return }
+                    let order = ExploreSource.allCases.map(\.rawValue)
+                    if let from = order.firstIndex(of: sourceRaw), let to = order.firstIndex(of: new) {
+                        sourceShift = to >= from ? 1 : -1
+                    }
+                    sourceRaw = new
+                }
+            ),
+            height: 36,
+            labelSize: 12.5,
+            horizontalPadding: 15
+        )
+    }
+
+    /// Muro's own catalog, as Explore has always shown it.
+    private var catalogBrowser: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            categoryRow
+                .padding(.horizontal, 40)
+                .padding(.top, 12)
+            filterRow
+                .padding(.horizontal, 40)
+                .padding(.top, 14)
+            ScrollView(.vertical, showsIndicators: false) {
+                Group {
+                    if filtered.isEmpty {
+                        emptyState
+                    } else {
+                        VStack(spacing: 22) {
+                            catalogNotice
+                            grid
+                        }
+                    }
+                }
+                .padding(.horizontal, 40)
+                .padding(.top, 22)
+                .padding(.bottom, 40)
+                .id(filterKey)
+                .transition(.muroPage(shift: categoryShift))
+            }
+            .scrollFade(top: 22, bottom: 46)
+            .animation(.muroPage, value: filterKey)
         }
     }
 

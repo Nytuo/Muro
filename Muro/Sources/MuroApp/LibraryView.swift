@@ -289,7 +289,7 @@ struct LibraryView: View {
                 Text(store.importStatus ?? "Drop videos here, or click to import")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
-                Text("MP4, MOV and M4V supported")
+                Text("MP4, MOV and M4V videos, or Wallpaper Engine item folders")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Color.muroSecondary)
             }
@@ -336,7 +336,8 @@ struct LibraryView: View {
 
     private func pickFiles() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie, .folder]
+        panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         if panel.runModal() == .OK {
             store.importFiles(panel.urls)
@@ -346,22 +347,31 @@ struct LibraryView: View {
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         var found = false
         let group = DispatchGroup()
+        let lock = NSLock()
         var urls: [URL] = []
         for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
             found = true
             group.enter()
             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
                 defer { group.leave() }
-                if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
-                    urls.append(url)
-                } else if let url = item as? URL {
-                    urls.append(url)
+                let url: URL?
+                if let data = item as? Data {
+                    url = URL(dataRepresentation: data, relativeTo: nil)
+                } else {
+                    url = item as? URL
                 }
+                guard let url else { return }
+                lock.lock()
+                urls.append(url)
+                lock.unlock()
             }
         }
         let storeRef = store
         group.notify(queue: .main) {
-            Task { @MainActor in storeRef.importFiles(urls) }
+            lock.lock()
+            let dropped = urls
+            lock.unlock()
+            Task { @MainActor in storeRef.importFiles(dropped) }
         }
         return found
     }

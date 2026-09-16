@@ -1,0 +1,3 @@
+[submodule "Muro/SceneEngine"]
+	path = Muro/SceneEngine
+	url = https://github.com/Nytuo/wallpaper-engine-rosetta.git

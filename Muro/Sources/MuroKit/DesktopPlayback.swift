@@ -15,9 +15,22 @@ import Foundation
 /// written down and tested, not implied by the order of a few calls.
 public enum DesktopPlayback {
     /// Whether the engine needs to look at windows at all. Nobody pays for
-    /// the check unless one of the switches is on.
-    public static func needsWindowCheck(playOnlyOnDesktop: Bool, replayOnClearDesktop: Bool) -> Bool {
-        playOnlyOnDesktop || replayOnClearDesktop
+    /// the check unless something wants the answer.
+    public static func needsWindowCheck(
+        playOnlyOnDesktop: Bool,
+        replayOnClearDesktop: Bool,
+        autoPauseWhenCovered: Bool = false
+    ) -> Bool {
+        playOnlyOnDesktop || replayOnClearDesktop || autoPauseWhenCovered
+    }
+
+    /// Whether a screen's wallpaper is held because app windows have hidden
+    /// its desktop completely.
+    /// Separate from `holds`: that one freezes as soon as *any* window is open
+    /// on the screen, which is a different thing.
+    /// This one only fires when there is nothing of the desktop left to see.
+    public static func holdsForCover(isHidden: Bool?, autoPauseWhenCovered: Bool) -> Bool {
+        autoPauseWhenCovered && isHidden == true
     }
 
     /// Whether a screen's wallpaper is held because a window is open on it.

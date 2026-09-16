@@ -136,8 +136,25 @@ struct MenuBarView: View {
                     store.updatePlaylist(playlist)
                 }
             }
+            transportButton(
+                store.isWallpaperMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                enabled: true,
+                active: !store.isWallpaperMuted
+            ) {
+                store.toggleMute()
+            }
+            .help(muteHelp)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var muteHelp: String {
+        if store.isWallpaperMuted {
+            return "Unmute wallpaper sound"
+        }
+        return store.currentWallpaperHasAudio
+            ? "Mute wallpaper sound"
+            : "Sound is on. This wallpaper has none of its own"
     }
 
     private func transportButton(
@@ -478,4 +495,3 @@ struct MenuRowButtonStyle: ButtonStyle {
             )
     }
 }
-

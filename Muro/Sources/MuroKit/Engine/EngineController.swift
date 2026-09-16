@@ -15,13 +15,20 @@ public final class EngineController {
     private var observers: [NSObjectProtocol] = []
     private let power = PowerMonitor()
     private let desktopWindows = DesktopWindowMonitor()
+    private let systemAudio = SystemAudioMonitor()
 
     public init() {}
 
     public func start() {
         power.onChange = { [weak self] in self?.applyPowerState() }
         power.start()
-        desktopWindows.onUpdate = { [weak self] covered in self?.applyDesktopCoverage(covered) }
+        desktopWindows.onUpdate = { [weak self] covered, hidden in
+            self?.applyDesktopCoverage(covered, hidden: hidden)
+        }
+        systemAudio.onChange = { [weak self] playing in
+            guard let self else { return }
+            for controller in self.controllers.values { controller.setDucked(playing) }
+        }
         reconcile()
         watchConfigDirectory()
         observers.append(NotificationCenter.default.addObserver(
@@ -81,23 +88,33 @@ public final class EngineController {
         }
         let config = EngineConfig.load(root: root)
 
-        var desired: [String: (screen: NSScreen, url: URL, frame: String,
-                               video: String, pauseAfter: Int?)] = [:]
+        var desired: [String: (screen: NSScreen, content: WallpaperWindowController.Content,
+                               frame: String, video: String, pauseAfter: Int?)] = [:]
         for screen in NSScreen.screens {
             guard let uuid = displayUUID(for: screen) else { continue }
             guard let assignment = config.assignment(forDisplayUUID: uuid),
                   let entry = manifest.wallpapers.first(where: { $0.id == assignment.wallpaperID })
             else { continue }
-            let url = resolveVideoURL(entry: entry, mode: assignment.mode, root: root)
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                EngineLog.log("skipping \(entry.title) — missing file \(url.lastPathComponent)")
+            let content: WallpaperWindowController.Content
+            let required: URL
+            if let scene = entry.scene {
+                let directory = root.appendingPathComponent(scene, isDirectory: true)
+                content = .scene(directory)
+                required = directory.appendingPathComponent("scene.json")
+            } else {
+                let url = resolveVideoURL(entry: entry, mode: assignment.mode, root: root)
+                content = .video(url)
+                required = url
+            }
+            guard FileManager.default.fileExists(atPath: required.path) else {
+                EngineLog.log("skipping \(entry.title) — missing file \(required.lastPathComponent)")
                 continue
             }
             desired[uuid] = (
                 screen,
-                url,
+                content,
                 NSStringFromRect(screen.frame),
-                "\(entry.id)|\(assignment.mode)",
+                Self.contentKey(entry: entry, mode: assignment.mode, required: required),
                 // A wallpaper may carry its own "pause after"; otherwise the
                 // one global setting applies. `PauseAfter` owns the rule,
                 // including the part that is easy to get wrong: a wallpaper
@@ -121,18 +138,18 @@ public final class EngineController {
 
         // Bring up displays that need a (new) wallpaper.
         for (uuid, want) in desired where controllers[uuid] == nil {
-            let controller = WallpaperWindowController(screen: want.screen, videoURL: want.url)
+            let controller = WallpaperWindowController(screen: want.screen, content: want.content)
             controller.start()
             controllers[uuid] = controller
             frames[uuid] = want.frame
             videos[uuid] = want.video
-            EngineLog.log("applied \(want.url.lastPathComponent) → \(want.screen.localizedName)")
+            EngineLog.log("applied \(want.content.url.lastPathComponent) → \(want.screen.localizedName)")
         }
 
         // Same window, different wallpaper: crossfade to it in place.
         for (uuid, want) in desired {
             guard let controller = controllers[uuid], videos[uuid] != want.video else { continue }
-            controller.setVideo(url: want.url)
+            controller.setContent(want.content)
             videos[uuid] = want.video
         }
 
@@ -144,10 +161,19 @@ public final class EngineController {
             controller.setUserPaused(paused)
             controller.setPlaybackRate(rate)
             controller.setAutoPauseFullScreen(pauseWhenCovered)
+            controller.setVolume(config.volume)
+            controller.setDucked(systemAudio.otherAudioIsPlaying)
             controller.setPauseAfter(desired[uuid]?.pauseAfter)
         }
         applyPowerState(config: config)
         applyDesktopRules(config: config)
+        applyAudioRules(config: config)
+    }
+
+    private static func contentKey(entry: WallpaperEntry, mode: String, required: URL) -> String {
+        guard entry.isScene else { return "\(entry.id)|\(mode)" }
+        let written = (try? FileManager.default.attributesOfItem(atPath: required.path)[.modificationDate]) as? Date
+        return "\(entry.id)|scene|\(Int(written?.timeIntervalSince1970 ?? 0))"
     }
 
     /// Issue #22. Hands both desktop switches to every display, and keeps the
@@ -162,17 +188,36 @@ public final class EngineController {
             )
         }
         if DesktopPlayback.needsWindowCheck(
-            playOnlyOnDesktop: playOnlyOnDesktop, replayOnClearDesktop: replayOnClearDesktop
+            playOnlyOnDesktop: playOnlyOnDesktop,
+            replayOnClearDesktop: replayOnClearDesktop,
+            autoPauseWhenCovered: config.autoPauseFullScreen ?? true
         ) {
             desktopWindows.start()
         } else {
             desktopWindows.stop()
-            for controller in controllers.values { controller.setDesktopCovered(nil) }
+            for controller in controllers.values {
+                controller.setDesktopCovered(nil)
+                controller.setDesktopHidden(nil)
+            }
         }
     }
 
-    private func applyDesktopCoverage(_ covered: Set<String>) {
+    /// Nobody pays for the audio watch unless the wallpaper can actually make
+    /// a sound: a silent library, or the sound switched off, and the monitor
+    /// is not running at all.
+    private func applyAudioRules(config: EngineConfig) {
+        let wanted = config.volume > 0 && (config.autoMuteWithOtherAudio ?? true)
+        if wanted {
+            systemAudio.start()
+        } else {
+            systemAudio.stop()
+            for controller in controllers.values { controller.setDucked(false) }
+        }
+    }
+
+    private func applyDesktopCoverage(_ covered: Set<String>, hidden: Set<String>) {
         for (uuid, controller) in controllers {
+            controller.setDesktopHidden(hidden.contains(uuid))
             controller.setDesktopCovered(covered.contains(uuid))
         }
     }

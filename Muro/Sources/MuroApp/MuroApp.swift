@@ -331,6 +331,15 @@ struct RootView: View {
         } message: {
             Text(store.importError ?? "Unknown error")
         }
+        .alert("Couldn’t download wallpaper", isPresented: Binding(
+            get: { store.downloadError != nil },
+            set: { if !$0 { store.downloadError = nil } }
+        )) {
+            Button("OK", role: .cancel) { store.downloadError = nil }
+        } message: {
+            Text(store.downloadError ?? "Unknown error")
+        }
+        .modifier(SourceAlerts())
         .sheet(item: $store.pendingDelete) { request in
             ConfirmDeleteView(request: request)
                 .environmentObject(store)

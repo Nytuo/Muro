@@ -119,7 +119,8 @@ final class AutomationScheduler {
         activePlaylistID = playlist.id
         stepIndex = 0
         stepStartedAt = Date()
-        apply?(playlist.wallpaperIDs[0])
+        let ids = playlist.wallpaperIDs
+        apply?(playlist.shuffle ? (ids.randomElement() ?? ids[0]) : ids[0])
         schedule()
     }
 
@@ -180,9 +181,12 @@ final class AutomationScheduler {
                 stepStartedAt = Date().addingTimeInterval(-max(0, elapsed))
                 applyCurrent(of: automation)
             }
-        } else if activePlaylist != nil {
-            advancePlaylist(forward: true)
-            return
+        } else if let playlist = activePlaylist {
+            let interval = Double(max(1, playlist.intervalMinutes) * 60)
+            if Date().timeIntervalSince(stepStartedAt) >= interval - 1 {
+                advancePlaylist(forward: true)
+                return
+            }
         }
         schedule()
     }

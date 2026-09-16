@@ -160,12 +160,15 @@ if opts.reorderOnly || opts.rebaseURLs {
     case .damaged:
         die("library.json at \(root.path) could not be read — refusing to publish from it")
     }
-    guard !manifest.wallpapers.isEmpty else { die("library is empty — nothing to publish") }
+    // Scenes are Workshop downloads, not Muro's to publish, and have no
+    // master video for the catalog to point at.
+    let publishable = manifest.wallpapers.filter { !$0.isScene }
+    guard !publishable.isEmpty else { die("library is empty — nothing to publish") }
     if opts.titles.isEmpty {
-        selected = manifest.wallpapers
+        selected = publishable
     } else {
         selected = opts.titles.map { title in
-            guard let entry = manifest.wallpapers.first(where: {
+            guard let entry = publishable.first(where: {
                 $0.title.lowercased() == title.lowercased()
             }) else {
                 die("no wallpaper titled \"\(title)\" — titles: "

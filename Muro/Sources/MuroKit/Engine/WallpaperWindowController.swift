@@ -9,7 +9,22 @@ import AVFoundation
 /// app covering the desktop, screen locked, or displays asleep — so the
 /// engine costs 0% CPU exactly when nobody can see the wallpaper.
 public final class WallpaperWindowController {
+    /// What a window shows: a looping video, or a Wallpaper Engine scene
+    /// rendered live by the scene engine.
+    public enum Content: Equatable {
+        case video(URL)
+        case scene(URL)
+
+        public var url: URL {
+            switch self {
+            case .video(let url), .scene(let url): return url
+            }
+        }
+    }
+
     private let window: NSWindow
+    private let screenScale: CGFloat
+    private var scene: SceneSurface?
     private var player: AVQueuePlayer
     private var playerLayer: AVPlayerLayer
     private var looper: AVPlayerLooper?
@@ -58,8 +73,18 @@ public final class WallpaperWindowController {
     private var playOnlyOnDesktop = false
     private var replayOnClearDesktop = false
     private var desktopCovered: Bool?
+    private var desktopHidden: Bool?
+    private var volume: Double = 0
+    private var ducked = false
 
-    public init(screen: NSScreen, videoURL: URL) {
+    private var effectiveVolume: Double { ducked ? 0 : volume }
+
+    public convenience init(screen: NSScreen, videoURL: URL) {
+        self.init(screen: screen, content: .video(videoURL))
+    }
+
+    public init(screen: NSScreen, content: Content) {
+        screenScale = screen.backingScaleFactor
         window = NSWindow(
             contentRect: screen.frame,
             styleMask: [.borderless],
@@ -97,9 +122,58 @@ public final class WallpaperWindowController {
         contentView.layer?.addSublayer(playerLayer)
         window.contentView = contentView
 
-        currentURL = videoURL
-        let item = AVPlayerItem(url: videoURL)
-        looper = AVPlayerLooper(player: player, templateItem: item)
+        currentURL = content.url
+        switch content {
+        case .video(let url):
+            looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
+        case .scene(let directory):
+            attachScene(directory)
+        }
+    }
+
+    /// Shows `content`, crossfading when it is a video.
+    public func setContent(_ content: Content) {
+        switch content {
+        case .video(let url): setVideo(url: url)
+        case .scene(let directory): setScene(directory)
+        }
+    }
+
+    // MARK: - Scenes
+
+    private func setScene(_ directory: URL) {
+        guard directory != currentURL || scene == nil else { return }
+        currentURL = directory
+        discardPendingSwap()
+        looper?.disableLooping()
+        looper = nil
+        player.pause()
+        player.removeAllItems()
+        scene?.invalidate()
+        scene = nil
+        attachScene(directory)
+        release("settled")
+        armSettleTimer()
+        EngineLog.log("switched to scene \(directory.lastPathComponent)")
+    }
+
+    private func attachScene(_ directory: URL) {
+        guard let contentView = window.contentView else { return }
+        guard let surface = SceneSurface(
+            sceneDirectory: directory, size: contentView.bounds.size, scale: screenScale
+        ) else {
+            EngineLog.log("scene \(directory.lastPathComponent) could not be rendered")
+            return
+        }
+        surface.window = window
+        surface.setVolume(effectiveVolume)
+        surface.layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        contentView.layer?.addSublayer(surface.layer)
+        CATransaction.commit()
+        surface.setSuspended(!holds.isEmpty)
+        scene = surface
     }
 
     // MARK: - Changing wallpaper without rebuilding the window
@@ -115,7 +189,8 @@ public final class WallpaperWindowController {
         discardPendingSwap()
 
         let nextPlayer = AVQueuePlayer()
-        nextPlayer.isMuted = true
+        nextPlayer.isMuted = effectiveVolume <= 0
+        nextPlayer.volume = Float(effectiveVolume)
         nextPlayer.preventsDisplaySleepDuringVideoPlayback = false
 
         let nextLayer = AVPlayerLayer(player: nextPlayer)
@@ -164,6 +239,8 @@ public final class WallpaperWindowController {
         let outgoingPlayer = player
         let outgoingLayer = playerLayer
         let outgoingLooper = looper
+        let outgoingScene = scene
+        scene = nil
 
         player = incoming.player
         playerLayer = incoming.layer
@@ -177,6 +254,7 @@ public final class WallpaperWindowController {
             outgoingPlayer.removeAllItems()
             outgoingLayer.player = nil
             outgoingLayer.removeFromSuperlayer()
+            outgoingScene?.invalidate()
         }
         incoming.layer.opacity = 1
         CATransaction.commit()
@@ -211,6 +289,8 @@ public final class WallpaperWindowController {
         settleTimer?.invalidate()
         settleTimer = nil
         player.pause()
+        scene?.invalidate()
+        scene = nil
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
@@ -241,6 +321,21 @@ public final class WallpaperWindowController {
         guard enabled != autoPauseFullScreen else { return }
         autoPauseFullScreen = enabled
         occlusionChanged()
+        applyCoverHold()
+    }
+
+    public func setDesktopHidden(_ hidden: Bool?) {
+        guard hidden != desktopHidden else { return }
+        desktopHidden = hidden
+        applyCoverHold()
+    }
+
+    private func applyCoverHold() {
+        if DesktopPlayback.holdsForCover(isHidden: desktopHidden, autoPauseWhenCovered: autoPauseFullScreen) {
+            hold("covered")
+        } else {
+            release("covered")
+        }
     }
 
     /// "Pause after": let a wallpaper move for a while when it starts, then
@@ -309,6 +404,34 @@ public final class WallpaperWindowController {
         }
     }
 
+    /// Wallpaper sound from Settings, applied live like the speed is. It
+    /// reaches a video's own audio track and a scene's audio layer alike; a
+    /// wallpaper with neither stays silent.
+    public func setVolume(_ newVolume: Double) {
+        guard abs(newVolume - volume) > 0.001 else { return }
+        volume = newVolume
+        applyVolume()
+    }
+
+    /// Silence while another app is playing, without forgetting the volume to
+    /// come back to.
+    public func setDucked(_ value: Bool) {
+        guard value != ducked else { return }
+        ducked = value
+        applyVolume()
+    }
+
+    /// Muted as well as at zero volume, so a silent wallpaper cannot be heard
+    /// through a rounding error, and so nothing decodes audio for nothing.
+    private func applyVolume() {
+        let level = effectiveVolume
+        for player in allPlayers {
+            player.isMuted = level <= 0
+            player.volume = Float(level)
+        }
+        scene?.setVolume(level)
+    }
+
     /// Playback speed from Settings (0.5×–1.5×). Applied live when playing.
     public func setPlaybackRate(_ rate: Float) {
         guard abs(rate - desiredRate) > 0.001 else { return }
@@ -372,6 +495,7 @@ public final class WallpaperWindowController {
         holds.insert(reason)
         if wasEmpty {
             allPlayers.forEach { $0.pause() }
+            scene?.setSuspended(true)
             EngineLog.log("paused (\(reason))")
         }
     }
@@ -379,6 +503,7 @@ public final class WallpaperWindowController {
     private func release(_ reason: String) {
         holds.remove(reason)
         guard holds.isEmpty else { return }
+        scene?.setSuspended(false)
         let stopped = allPlayers.filter { $0.rate == 0 }
         guard !stopped.isEmpty else { return }
         stopped.forEach { $0.playImmediately(atRate: desiredRate) }

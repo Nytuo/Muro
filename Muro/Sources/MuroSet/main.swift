@@ -49,6 +49,10 @@ while !args.isEmpty {
 
 if listWallpapers {
     for w in manifest.wallpapers {
+        if w.isScene {
+            print("\(w.title)  —  \(w.category), \(w.width)x\(w.height) Wallpaper Engine scene")
+            continue
+        }
         let eff = w.efficientFile != nil ? " [+30fps variant]" : ""
         print("\(w.title)  —  \(w.category), \(w.width)x\(w.height) @\(Int(w.fps))fps\(eff)")
     }
@@ -65,7 +69,8 @@ if listDisplays {
 }
 
 if clear {
-    config = EngineConfig()
+    config.allDisplays = nil
+    config.perDisplay = [:]
     try? config.save(root: root)
     print("cleared all assignments")
     exit(0)
@@ -87,6 +92,9 @@ var entry = manifest.wallpapers[index]
 
 // Efficient mode: generate the 30 fps variant once if the master is >40 fps.
 var mode = "smooth"
+if efficient, entry.isScene {
+    fail("\"\(entry.title)\" is a scene; --efficient only applies to videos")
+}
 if efficient {
     mode = "efficient"
     if entry.fps > 40, entry.efficientFile == nil {
@@ -100,8 +108,11 @@ if efficient {
                 halveFrameRate: true
             )
             entry.efficientFile = variantRelative
-            manifest.wallpapers[index] = entry
-            try manifest.save(root: root)
+            let id = entry.id
+            try LibraryWriter.update(root: root) { fresh in
+                guard let row = fresh.wallpapers.firstIndex(where: { $0.id == id }) else { return }
+                fresh.wallpapers[row].efficientFile = variantRelative
+            }
         } catch {
             fail("variant generation failed: \(error)")
         }

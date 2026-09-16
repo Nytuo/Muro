@@ -20,6 +20,18 @@ public struct WallpaperEntry: Codable, Identifiable, Equatable {
     /// Per wallpaper "pause after", overriding the global setting. Nil means
     /// follow the setting; a value here wins for this wallpaper only.
     public var pauseAfterSeconds: Int?
+    /// A Wallpaper Engine scene rather than a video: the folder, relative to
+    /// the root, that holds its `scene.json` and the downloaded item. `file`
+    /// points at that `scene.json` so the entry stays valid for anything that
+    /// only reads the manifest, but nothing may treat it as a video.
+    public var scene: String?
+    /// Where a wallpaper was downloaded from outside Muro's own catalog, as
+    /// `<source>:<key>`, e.g. `workshop:2853719148`. Lets Explore show a
+    /// browse result as already in the library.
+    public var origin: String?
+    public var hasAudio: Bool?
+
+    public var isScene: Bool { scene != nil }
 
     public init(
         id: String, title: String, category: String, file: String,
@@ -27,8 +39,12 @@ public struct WallpaperEntry: Codable, Identifiable, Equatable {
         thumbnail: String, width: Int,
         height: Int, fps: Double, duration: Double, sizeBytes: Int64,
         liked: Bool = false, dateAdded: Date = Date(),
-        pauseAfterSeconds: Int? = nil
+        pauseAfterSeconds: Int? = nil,
+        scene: String? = nil, origin: String? = nil, hasAudio: Bool? = nil
     ) {
+        self.scene = scene
+        self.origin = origin
+        self.hasAudio = hasAudio
         self.id = id
         self.title = title
         self.category = category
@@ -51,7 +67,7 @@ public struct WallpaperEntry: Codable, Identifiable, Equatable {
     /// list by hand was one more chance to forget the preview or the
     /// efficient variant and leave it on disk forever.
     public var relativeFiles: [String] {
-        [file, efficientFile, previewFile, thumbnail].compactMap { $0 }
+        [file, efficientFile, previewFile, thumbnail, scene].compactMap { $0 }
     }
 }
 

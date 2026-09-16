@@ -44,6 +44,9 @@ The main app uses normal user-level access to:
 - Store downloaded wallpapers, imported videos, preferences, and playlists
 - Observe display sleep, screen lock, its wallpaper windows' visibility, and
   power state
+- Ask CoreAudio, about once a second while a wallpaper with sound is playing,
+  whether any other process on the Mac is currently outputting audio, so Muro
+  can duck its own sound
 - Register Muro as a login item only when you enable **Launch at Login**
 - Set your Mac's screen saver, and how long it waits, when you ask it to
 - Read the position, size, layer and opacity of on-screen windows, never their
@@ -71,6 +74,15 @@ on: a click is the earliest sign that a window is about to open, close or
 minimise. Only the fact that a click happened is used, never where it landed or
 on what, and key events are never observed. Nothing here is stored or uploaded,
 and with both switches off, which is the default, none of it runs.
+
+### Ducking for other audio
+
+Muro can lower its own wallpaper's volume while something else on
+the Mac is making sound, and bring it back up once that goes quiet.
+
+This only runs while a wallpaper with volume above zero is playing and while
+**Quieten for other audio**, on by default, is enabled; turning the volume off
+or disabling that setting stops the poll entirely.
 
 ### Desktop picture
 
@@ -218,7 +230,9 @@ Muro stores local data in:
 
 - `~/Library/Application Support/Muro` for downloaded and imported wallpapers,
   thumbnails, configuration, playlists, lock-screen state, and wallpaper-store
-  backups
+  backups, including `Scenes/` for Wallpaper Engine scenes, `Workshop/` for a
+  download in progress, `Tools/DepotDownloader`, and `WEAssets/` for stock
+  textures you copy there yourself
 - `~/Library/Caches/Muro/Previews` for a preview cache capped at 200 MB
 - The `com.mrrockysl.muro` preferences domain for interface and catalog settings
 - The wallpaper extension's container for staged lock-screen files and its
@@ -247,8 +261,11 @@ overwritten each time, and is never uploaded.
 ### Dependencies and release contents
 
 The Swift package has no external package dependencies and otherwise uses Apple
-system frameworks. Parts of the wallpaper extension are derived from the
-MIT-licensed Phosphene project and are documented in
+system frameworks. `Muro/SceneEngine` is a git submodule of an independent,
+third-party dependency, not Muro's own code:
+[wallpaper-engine-rosetta](https://github.com/Nytuo/wallpaper-engine-rosetta)
+Parts of the wallpaper extension are derived from
+the MIT-licensed Phosphene project. All of it is documented in
 [`Muro/THIRD_PARTY_NOTICES.md`](Muro/THIRD_PARTY_NOTICES.md).
 
 The source tree includes developer command-line tools for preparing and
@@ -285,6 +302,11 @@ assets expected by `Muro/build-app.sh`.
 - The main app is not sandboxed.
 - Lock-screen support depends on private macOS interfaces.
 - Muro trusts the URLs and metadata supplied by the default HTTPS catalog.
+- The outside sources are read from HTML Muro does not control, and a site can
+  change what a title or thumbnail says. Downloads from them are only ever
+  imported as video, or as a Wallpaper Engine scene for Workshop items.
+- Wallpaper Engine scenes are parsed from untrusted Workshop files and their
+  shaders are compiled and run on the GPU.
   The catalog and wallpaper assets have no separate cryptographic signatures,
   hashes, or host pinning.
 - A failed lock-screen operation could temporarily change wallpaper settings,
